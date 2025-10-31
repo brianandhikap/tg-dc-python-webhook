@@ -8,14 +8,15 @@ import config
 from database import Database
 
 class TelegramBot:
-    def __init__(self):
+    def __init__(self, debug=True):
         self.client = TelegramClient(
             f'{config.SESSION_PATH}/{config.TELEGRAM_SESSION}',
             config.TELEGRAM_API_ID,
             config.TELEGRAM_API_HASH
         )
         self.db = Database()
-        self.base_url = f"http://{config.HOST}:{config.PORT}"
+        self.base_url = f"http://{config.HOST}:{config.PORT}"  # Changed to HTTP
+        self.debug = debug
         
     async def start(self):
         """Start the Telegram client"""
@@ -33,7 +34,18 @@ class TelegramBot:
         groups = self.db.get_all_groups()
         print(f"📊 Monitoring {len(groups)} groups from database")
         
-        print("🚀 Bot is running... Press Ctrl+C to stop")
+        # Print group list
+        for group_id in groups:
+            try:
+                entity = await self.client.get_entity(group_id)
+                print(f"   📢 {entity.title} ({group_id})")
+            except:
+                print(f"   📢 Group ID: {group_id}")
+        
+        print("\n" + "="*60)
+        print("🚀 Bot is running... Waiting for messages...")
+        print("="*60 + "\n")
+        
         await self.client.run_until_disconnected()
     
     def setup_handlers(self):
@@ -50,6 +62,7 @@ class TelegramBot:
             chat_id = event.chat_id
             
             # Convert to proper group ID format
+            original_chat_id = chat_id
             if not str(chat_id).startswith('-100'):
                 chat_id = int(f"-100{chat_id}")
             
@@ -61,14 +74,29 @@ class TelegramBot:
                 elif hasattr(event.message.reply_to, 'forum_topic') and event.message.reply_to.forum_topic:
                     topic_id = event.message.reply_to.reply_to_msg_id or 0
             
+            if self.debug:
+                print(f"\n📨 New message detected!")
+                print(f"   Chat: {getattr(chat, 'title', 'Unknown')} ({chat_id})")
+                print(f"   Topic ID: {topic_id}")
+            
             # Check if this group+topic has webhook
             webhook_url = self.db.get_webhook(chat_id, topic_id)
+            
             if not webhook_url:
-                return  # No webhook configured for this group/topic
+                if self.debug:
+                    print(f"   ⚠️ No webhook configured for this group/topic")
+                    print(f"   Database lookup: group_id={chat_id}, topic_id={topic_id}")
+                return
+            
+            if self.debug:
+                print(f"   ✅ Webhook found! Forwarding to Discord...")
             
             # Get sender info
             sender = await event.get_sender()
             sender_name = self.get_sender_name(sender)
+            
+            if self.debug:
+                print(f"   👤 Sender: {sender_name}")
             
             # Get and save avatar
             avatar_url = await self.get_avatar_url(sender, sender_name)
@@ -76,9 +104,15 @@ class TelegramBot:
             # Prepare message content
             content = event.message.message or ""
             
+            if self.debug and content:
+                preview = content[:50] + "..." if len(content) > 50 else content
+                print(f"   💬 Content: {preview}")
+            
             # Handle media
             embeds = []
             if event.message.media:
+                if self.debug:
+                    print(f"   📎 Media detected, downloading...")
                 media_url = await self.handle_media(event.message)
                 if media_url:
                     embed = {
@@ -90,7 +124,7 @@ class TelegramBot:
                     embeds.append(embed)
             
             # Send to Discord
-            await self.send_to_discord(
+            success = await self.send_to_discord(
                 webhook_url=webhook_url,
                 username=sender_name,
                 avatar_url=avatar_url,
@@ -98,10 +132,16 @@ class TelegramBot:
                 embeds=embeds if embeds else None
             )
             
-            print(f"✅ Forwarded message from {sender_name} in {chat.title} (Topic: {topic_id})")
+            if success:
+                print(f"✅ [{datetime.now().strftime('%H:%M:%S')}] Forwarded: {sender_name} → Discord")
+            else:
+                print(f"❌ [{datetime.now().strftime('%H:%M:%S')}] Failed to forward from {sender_name}")
             
         except Exception as e:
             print(f"❌ Error handling message: {e}")
+            if self.debug:
+                import traceback
+                traceback.print_exc()
     
     def get_sender_name(self, sender):
         """Get sender display name"""
@@ -129,16 +169,16 @@ class TelegramBot:
                     sender,
                     file=avatar_path
                 )
-                if photo:
-                    print(f"📸 Downloaded avatar for {sender_name}")
+                if photo and self.debug:
+                    print(f"   📸 Downloaded avatar for {sender_name}")
             
             if os.path.exists(avatar_path):
                 return f"{self.base_url}/ava/{safe_name}.jpg"
             
         except Exception as e:
-            print(f"⚠️ Error downloading avatar: {e}")
+            if self.debug:
+                print(f"   ⚠️ Error downloading avatar: {e}")
         
-        # Return default Discord avatar if failed
         return None
     
     async def handle_media(self, message):
@@ -153,7 +193,8 @@ class TelegramBot:
                 
                 # Download media
                 await self.client.download_media(message, filepath)
-                print(f"📥 Downloaded media: {filename}")
+                if self.debug:
+                    print(f"   📥 Downloaded media: {filename}")
                 
                 return f"{self.base_url}/media/{filename}"
                 
@@ -209,9 +250,12 @@ class TelegramBot:
                         print(f"⚠️ Discord webhook error: {response.status}")
                         text = await response.text()
                         print(f"Response: {text}")
+                        return False
+                    return True
                     
         except Exception as e:
             print(f"❌ Error sending to Discord: {e}")
+            return False
     
     async def stop(self):
         """Stop the bot"""
