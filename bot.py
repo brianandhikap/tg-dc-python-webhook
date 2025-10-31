@@ -5,11 +5,13 @@ import logging
 from telethon import TelegramClient, events
 from telethon.tl.types import MessageMediaPhoto, MessageMediaDocument
 from telethon.errors import (
-    FloodWaitError, 
-    ServerError, 
+    FloodWaitError,
+    ServerError,
     TimedOutError,
-    ConnectionError as TelethonConnectionError
+    RPCError
 )
+
+TelethonConnectionError = (OSError, ConnectionError)
 from datetime import datetime
 from queue import Queue
 from threading import Thread
