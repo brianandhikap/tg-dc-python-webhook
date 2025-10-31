@@ -55,64 +55,111 @@ class TelegramBot:
             await self.handle_message(event)
     
     async def handle_message(self, event):
+async def handle_message(self, event):
         """Handle incoming messages"""
         try:
             # Get chat and message info
             chat = await event.get_chat()
             chat_id = event.chat_id
-            
+        
             # Convert to proper group ID format
-            original_chat_id = chat_id
             if not str(chat_id).startswith('-100'):
                 chat_id = int(f"-100{chat_id}")
-            
-            # Get topic ID (for forum/topics)
-            topic_id = 0
+        
+            # ============= IMPROVED TOPIC DETECTION =============
+            topic_id = 0  # Default untuk group biasa
+        
+            # Method 1: Check reply_to_top_id (most reliable for topics)
             if hasattr(event.message, 'reply_to') and event.message.reply_to:
                 if hasattr(event.message.reply_to, 'reply_to_top_id'):
-                    topic_id = event.message.reply_to.reply_to_top_id or 0
-                elif hasattr(event.message.reply_to, 'forum_topic') and event.message.reply_to.forum_topic:
-                    topic_id = event.message.reply_to.reply_to_msg_id or 0
-            
+                    if event.message.reply_to.reply_to_top_id:
+                        topic_id = event.message.reply_to.reply_to_top_id
+        
+            # Method 2: Check if message itself is a topic message
+            if topic_id == 0 and hasattr(event.message, 'id'):
+                # Untuk pesan pertama di topic, topic_id sama dengan message_id
+                if hasattr(chat, 'forum') and chat.forum:
+                    # Coba dapatkan dari action
+                    if hasattr(event.message, 'action'):
+                        topic_id = event.message.id
+        
+            # Method 3: Get from message metadata
+            if topic_id == 0:
+                if hasattr(event.message, 'reply_to_msg_id'):
+                    msg_id = event.message.reply_to_msg_id
+                    if msg_id and hasattr(chat, 'forum') and chat.forum:
+                        # Di forum, biasanya message di-reply ke topic header
+                        topic_id = msg_id
+        
+            # Detect if group has forum feature
+            is_forum = hasattr(chat, 'forum') and chat.forum
+        
+            # ============= ALWAYS LOG ALL MESSAGES =============
+            print(f"\n{'='*70}")
+            print(f"📨 NEW MESSAGE")
+            print(f"{'='*70}")
+            print(f"Chat: {getattr(chat, 'title', 'Unknown')}")
+            print(f"Group ID: {chat_id}")
+            print(f"Is Forum: {'YES ✅' if is_forum else 'NO ❌'}")
+            print(f"Detected Topic ID: {topic_id}")
+        
+            # Debug message details
             if self.debug:
-                print(f"\n📨 New message detected!")
-                print(f"   Chat: {getattr(chat, 'title', 'Unknown')} ({chat_id})")
-                print(f"   Topic ID: {topic_id}")
-            
-            # Check if this group+topic has webhook
+                print(f"\n🔍 DEBUG INFO:")
+                if hasattr(event.message, 'reply_to') and event.message.reply_to:
+                    reply = event.message.reply_to
+                    print(f"   reply_to exists: YES")
+                    print(f"   reply_to_msg_id: {getattr(reply, 'reply_to_msg_id', 'N/A')}")
+                    print(f"   reply_to_top_id: {getattr(reply, 'reply_to_top_id', 'N/A')}")
+                    print(f"   forum_topic: {getattr(reply, 'forum_topic', 'N/A')}")
+                else:
+                    print(f"   reply_to: NO")
+                print(f"   message_id: {event.message.id}")
+        
+            # ============= CHECK DATABASE =============
             webhook_url = self.db.get_webhook(chat_id, topic_id)
-            
+        
+            print(f"\n🔍 Database Lookup:")
+            print(f"   Looking for: group_id={chat_id}, topic_id={topic_id}")
+        
             if not webhook_url:
-                if self.debug:
-                    print(f"   ⚠️ No webhook configured for this group/topic")
-                    print(f"   Database lookup: group_id={chat_id}, topic_id={topic_id}")
+                print(f"   Result: ❌ NOT FOUND")
+            
+                # Try to find ANY webhook for this group
+                all_webhooks = self.db.get_all_webhooks_for_group(chat_id)
+                if all_webhooks:
+                    print(f"\n   ⚠️ But this group HAS webhooks in database:")
+                    for wh in all_webhooks:
+                        print(f"      - Topic {wh['topic_id']}: {wh['webhook_url'][:50]}...")
+                    print(f"\n   💡 Topic ID mismatch! Message has topic_id={topic_id}")
+                else:
+                    print(f"   💡 No webhooks configured for group {chat_id}")
+            
+                print(f"{'='*70}\n")
                 return
-            
-            if self.debug:
-                print(f"   ✅ Webhook found! Forwarding to Discord...")
-            
+        
+            print(f"   Result: ✅ FOUND")
+            print(f"   Webhook: {webhook_url[:50]}...")
+        
             # Get sender info
             sender = await event.get_sender()
             sender_name = self.get_sender_name(sender)
-            
-            if self.debug:
-                print(f"   👤 Sender: {sender_name}")
-            
+            print(f"\n👤 Sender: {sender_name}")
+        
             # Get and save avatar
             avatar_url = await self.get_avatar_url(sender, sender_name)
-            
+        
             # Prepare message content
             content = event.message.message or ""
-            
-            if self.debug and content:
-                preview = content[:50] + "..." if len(content) > 50 else content
-                print(f"   💬 Content: {preview}")
-            
+        
+            if content:
+                preview = content[:100] + "..." if len(content) > 100 else content
+                print(f"💬 Content: {preview}")
+        
             # Handle media
             embeds = []
             if event.message.media:
-                if self.debug:
-                    print(f"   📎 Media detected, downloading...")
+                print(f"📎 Media detected, downloading...")
                 media_url = await self.handle_media(event.message)
                 if media_url:
                     embed = {
@@ -120,10 +167,11 @@ class TelegramBot:
                     }
                     if content:
                         embed["description"] = content
-                        content = ""  # Move text to embed
+                        content = ""
                     embeds.append(embed)
-            
+        
             # Send to Discord
+            print(f"\n📤 Sending to Discord...")
             success = await self.send_to_discord(
                 webhook_url=webhook_url,
                 username=sender_name,
@@ -131,12 +179,14 @@ class TelegramBot:
                 content=content,
                 embeds=embeds if embeds else None
             )
-            
+        
             if success:
-                print(f"✅ [{datetime.now().strftime('%H:%M:%S')}] Forwarded: {sender_name} → Discord")
+                print(f"✅ SUCCESS - Forwarded to Discord")
             else:
-                print(f"❌ [{datetime.now().strftime('%H:%M:%S')}] Failed to forward from {sender_name}")
-            
+                print(f"❌ FAILED - Could not forward to Discord")
+        
+            print(f"{'='*70}\n")
+        
         except Exception as e:
             print(f"❌ Error handling message: {e}")
             if self.debug:
