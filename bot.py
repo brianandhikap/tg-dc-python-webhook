@@ -48,180 +48,187 @@ class TelegramBot:
             await self.handle_message(event)
             
     # Handle_message
-    async def handle_message(self, event):
-        """Handle incoming messages"""
-        try:
-            # Get chat and message info
-            chat = await event.get_chat()
-            chat_id = event.chat_id
+async def handle_message(self, event):
+    """Handle incoming messages"""
+    try:
+        # Get chat and message info
+        chat = await event.get_chat()
+        chat_id = event.chat_id
         
-            # Convert to proper group ID format
-            if not str(chat_id).startswith('-100'):
-                chat_id = int(f"-100{chat_id}")
+        # Convert to proper group ID format
+        if not str(chat_id).startswith('-100'):
+            chat_id = int(f"-100{chat_id}")
         
-            # ============= IMPROVED TOPIC DETECTION =============
-            topic_id = 0  # Default untuk group biasa
-            detection_method = "none"
+        # ============= SMART TOPIC DETECTION =============
+        topic_id = 0  # Default untuk group biasa
+        detection_method = "none"
         
-            # Method 1: Check reply_to (untuk pesan yang reply ke pesan lain)
+        # Detect if group has forum feature
+        is_forum = hasattr(chat, 'forum') and chat.forum
+        
+        if hasattr(event.message, 'reply_to') and event.message.reply_to:
+            reply = event.message.reply_to
+            
+            # Method 1: forum_topic = True (direct topic message)
+            if hasattr(reply, 'forum_topic') and reply.forum_topic:
+                if hasattr(reply, 'reply_to_msg_id') and reply.reply_to_msg_id:
+                    topic_id = reply.reply_to_msg_id
+                    detection_method = "forum_topic (direct)"
+            
+            # Method 2: reply_to_top_id exists (might be topic or nested reply)
+            elif hasattr(reply, 'reply_to_top_id') and reply.reply_to_top_id:
+                potential_topic_id = reply.reply_to_top_id
+                
+                # Verify if this is actually a topic header or just a message
+                # by fetching the message and checking its attributes
+                try:
+                    top_message = await self.client.get_messages(chat_id, ids=potential_topic_id)
+                    
+                    if top_message:
+                        # Check if this message has reply_to (means it's not topic header)
+                        if hasattr(top_message, 'reply_to') and top_message.reply_to:
+                            # This is a regular message, not topic header
+                            # Trace back to find the real topic
+                            if hasattr(top_message.reply_to, 'forum_topic') and top_message.reply_to.forum_topic:
+                                if hasattr(top_message.reply_to, 'reply_to_msg_id'):
+                                    topic_id = top_message.reply_to.reply_to_msg_id
+                                    detection_method = "traced from nested reply"
+                            elif hasattr(top_message.reply_to, 'reply_to_top_id') and top_message.reply_to.reply_to_top_id:
+                                topic_id = top_message.reply_to.reply_to_top_id
+                                detection_method = "traced from reply chain"
+                            else:
+                                # Fallback: use the potential_topic_id
+                                topic_id = potential_topic_id
+                                detection_method = "reply_to_top_id (unverified)"
+                        else:
+                            # No reply_to, this might be the topic header
+                            topic_id = potential_topic_id
+                            detection_method = "reply_to_top_id (verified as header)"
+                    else:
+                        # Could not fetch, use as-is
+                        topic_id = potential_topic_id
+                        detection_method = "reply_to_top_id (could not verify)"
+                        
+                except Exception as e:
+                    # If fetch fails, use the value anyway
+                    topic_id = potential_topic_id
+                    detection_method = f"reply_to_top_id (fetch error: {str(e)[:50]})"
+        
+        # If still 0 and it's a forum, try alternative method
+        if topic_id == 0 and is_forum:
+            # For messages not replying to anything in a forum
+            # Check if there's a way to get topic from message metadata
+            try:
+                # Try to get from the message's grouped_id or other attributes
+                if hasattr(event.message, 'grouped_id') and event.message.grouped_id:
+                    # This is part of an album, might have topic info
+                    pass
+            except:
+                pass
+        
+        # ============= LOGGING =============
+        print(f"\n{'='*70}")
+        print(f"📨 NEW MESSAGE")
+        print(f"{'='*70}")
+        print(f"Chat: {getattr(chat, 'title', 'Unknown')}")
+        print(f"Group ID: {chat_id}")
+        print(f"Is Forum: {'YES ✅' if is_forum else 'NO ❌'}")
+        print(f"Detected Topic ID: {topic_id} (method: {detection_method})")
+        
+        # Debug message details
+        if self.debug:
+            print(f"\n🔍 DEBUG INFO:")
             if hasattr(event.message, 'reply_to') and event.message.reply_to:
                 reply = event.message.reply_to
-            
-                # Priority 1: reply_to_top_id (paling akurat)
-                if hasattr(reply, 'reply_to_top_id') and reply.reply_to_top_id:
-                    topic_id = reply.reply_to_top_id
-                    detection_method = "reply_to_top_id"
-            
-                # Priority 2: Jika forum_topic=True, gunakan reply_to_msg_id
-                elif hasattr(reply, 'forum_topic') and reply.forum_topic:
-                    if hasattr(reply, 'reply_to_msg_id') and reply.reply_to_msg_id:
-                        topic_id = reply.reply_to_msg_id
-                        detection_method = "forum_topic (reply_to_msg_id)"
-        
-            # Method 2: Untuk pesan baru tanpa reply, coba ambil dari peer_id
-            # Ini untuk handle pesan baru di topic yang tidak reply ke pesan lain
-            if topic_id == 0 and hasattr(chat, 'forum') and chat.forum:
-                # Coba fetch full message untuk dapat context lengkap
-                try:
-                    full_messages = await self.client.get_messages(
-                        chat_id, 
-                        ids=event.message.id
-                    )
-                    if full_messages and hasattr(full_messages, 'reply_to'):
-                        reply = full_messages.reply_to
-                        if hasattr(reply, 'reply_to_top_id') and reply.reply_to_top_id:
-                            topic_id = reply.reply_to_top_id
-                            detection_method = "get_messages (reply_to_top_id)"
-                        elif hasattr(reply, 'reply_to_msg_id') and reply.reply_to_msg_id:
-                            topic_id = reply.reply_to_msg_id
-                            detection_method = "get_messages (reply_to_msg_id)"
-                except Exception as e:
-                    if self.debug:
-                        print(f"   ⚠️ Could not fetch full message: {e}")
-        
-            # Method 3: Alternative - check raw API attributes
-            if topic_id == 0 and hasattr(chat, 'forum') and chat.forum:
-                # Try to get from raw message object
-                if hasattr(event.message, 'to_dict'):
-                    msg_dict = event.message.to_dict()
-                    if 'reply_to' in msg_dict and msg_dict['reply_to']:
-                        reply_dict = msg_dict['reply_to']
-                        if 'reply_to_top_id' in reply_dict and reply_dict['reply_to_top_id']:
-                            topic_id = reply_dict['reply_to_top_id']
-                            detection_method = "raw_dict (reply_to_top_id)"
-        
-            # Detect if group has forum feature
-            is_forum = hasattr(chat, 'forum') and chat.forum
-        
-            # ============= LOGGING =============
-            print(f"\n{'='*70}")
-            print(f"📨 NEW MESSAGE")
-            print(f"{'='*70}")
-            print(f"Chat: {getattr(chat, 'title', 'Unknown')}")
-            print(f"Group ID: {chat_id}")
-            print(f"Is Forum: {'YES ✅' if is_forum else 'NO ❌'}")
-            print(f"Detected Topic ID: {topic_id} (method: {detection_method})")
-        
-            # Debug message details
-            if self.debug:
-                print(f"\n🔍 DEBUG INFO:")
-                if hasattr(event.message, 'reply_to') and event.message.reply_to:
-                    reply = event.message.reply_to
-                    print(f"   reply_to exists: YES")
-                    print(f"   reply_to_msg_id: {getattr(reply, 'reply_to_msg_id', 'N/A')}")
-                    print(f"   reply_to_top_id: {getattr(reply, 'reply_to_top_id', 'N/A')}")
-                    print(f"   forum_topic: {getattr(reply, 'forum_topic', 'N/A')}")
-                else:
-                    print(f"   reply_to: NO")
-                print(f"   message_id: {event.message.id}")
-            
-                # Print raw message structure for debugging
-                if topic_id == 0 and is_forum:
-                    print(f"\n   🔍 Raw message attributes:")
-                    print(f"   {dir(event.message.reply_to) if hasattr(event.message, 'reply_to') else 'No reply_to'}")
-        
-            # ============= CHECK DATABASE =============
-            webhook_url = self.db.get_webhook(chat_id, topic_id)
-        
-            print(f"\n🔍 Database Lookup:")
-            print(f"   Looking for: group_id={chat_id}, topic_id={topic_id}")
-        
-            if not webhook_url:
-                print(f"   Result: ❌ NOT FOUND")
-            
-                # Try to find ANY webhook for this group
-                all_webhooks = self.db.get_all_webhooks_for_group(chat_id)
-                if all_webhooks:
-                    print(f"\n   ⚠️ But this group HAS webhooks in database:")
-                    for wh in all_webhooks:
-                        print(f"      - Topic {wh['topic_id']}: {wh['webhook_url'][:50]}...")
-                    print(f"\n   💡 Topic ID mismatch! Message has topic_id={topic_id}")
-                
-                    # Suggest if it's a forum with topic_id=0
-                    if is_forum and topic_id == 0:
-                        print(f"\n   ⚠️ WARNING: This is a FORUM GROUP but topic_id=0 detected!")
-                        print(f"   This usually means the message is NOT in a topic thread.")
-                        print(f"   Please check if the message was sent in General/Main chat.")
-                else:
-                    print(f"   💡 No webhooks configured for group {chat_id}")
-            
-                print(f"{'='*70}\n")
-                return
-        
-            print(f"   Result: ✅ FOUND")
-            print(f"   Webhook: {webhook_url[:50]}...")
-        
-            # Get sender info
-            sender = await event.get_sender()
-            sender_name = self.get_sender_name(sender)
-            print(f"\n👤 Sender: {sender_name}")
-        
-            # Get and save avatar
-            avatar_url = await self.get_avatar_url(sender, sender_name)
-        
-            # Prepare message content
-            content = event.message.message or ""
-        
-            if content:
-                preview = content[:100] + "..." if len(content) > 100 else content
-                print(f"💬 Content: {preview}")
-        
-            # Handle media
-            embeds = []
-            if event.message.media:
-                print(f"📎 Media detected, downloading...")
-                media_url = await self.handle_media(event.message)
-                if media_url:
-                    embed = {
-                        "image": {"url": media_url}
-                    }
-                    if content:
-                        embed["description"] = content
-                        content = ""
-                    embeds.append(embed)
-        
-            # Send to Discord
-            print(f"\n📤 Sending to Discord...")
-            success = await self.send_to_discord(
-                webhook_url=webhook_url,
-                username=sender_name,
-                avatar_url=avatar_url,
-                content=content,
-                embeds=embeds if embeds else None
-            )
-        
-            if success:
-                print(f"✅ SUCCESS - Forwarded to Discord")
+                print(f"   reply_to exists: YES")
+                print(f"   reply_to_msg_id: {getattr(reply, 'reply_to_msg_id', 'N/A')}")
+                print(f"   reply_to_top_id: {getattr(reply, 'reply_to_top_id', 'N/A')}")
+                print(f"   forum_topic: {getattr(reply, 'forum_topic', 'N/A')}")
             else:
-                print(f"❌ FAILED - Could not forward to Discord")
+                print(f"   reply_to: NO")
+            print(f"   message_id: {event.message.id}")
         
+        # ============= CHECK DATABASE =============
+        webhook_url = self.db.get_webhook(chat_id, topic_id)
+        
+        print(f"\n🔍 Database Lookup:")
+        print(f"   Looking for: group_id={chat_id}, topic_id={topic_id}")
+        
+        if not webhook_url:
+            print(f"   Result: ❌ NOT FOUND")
+            
+            # Try to find ANY webhook for this group
+            all_webhooks = self.db.get_all_webhooks_for_group(chat_id)
+            if all_webhooks:
+                print(f"\n   ⚠️ But this group HAS webhooks in database:")
+                for wh in all_webhooks:
+                    print(f"      - Topic {wh['topic_id']}: {wh['webhook_url'][:50]}...")
+                print(f"\n   💡 Topic ID mismatch! Message has topic_id={topic_id}")
+                
+                # Suggest if it's a forum with topic_id=0
+                if is_forum and topic_id == 0:
+                    print(f"\n   ⚠️ WARNING: This is a FORUM GROUP but topic_id=0 detected!")
+                    print(f"   This usually means the message is NOT in a topic thread.")
+            else:
+                print(f"   💡 No webhooks configured for group {chat_id}")
+            
             print(f"{'='*70}\n")
+            return
         
-        except Exception as e:
-            print(f"❌ Error handling message: {e}")
-            if self.debug:
-                import traceback
-                traceback.print_exc()
+        print(f"   Result: ✅ FOUND")
+        print(f"   Webhook: {webhook_url[:50]}...")
+        
+        # Get sender info
+        sender = await event.get_sender()
+        sender_name = self.get_sender_name(sender)
+        print(f"\n👤 Sender: {sender_name}")
+        
+        # Get and save avatar
+        avatar_url = await self.get_avatar_url(sender, sender_name)
+        
+        # Prepare message content
+        content = event.message.message or ""
+        
+        if content:
+            preview = content[:100] + "..." if len(content) > 100 else content
+            print(f"💬 Content: {preview}")
+        
+        # Handle media
+        embeds = []
+        if event.message.media:
+            print(f"📎 Media detected, downloading...")
+            media_url = await self.handle_media(event.message)
+            if media_url:
+                embed = {
+                    "image": {"url": media_url}
+                }
+                if content:
+                    embed["description"] = content
+                    content = ""
+                embeds.append(embed)
+        
+        # Send to Discord
+        print(f"\n📤 Sending to Discord...")
+        success = await self.send_to_discord(
+            webhook_url=webhook_url,
+            username=sender_name,
+            avatar_url=avatar_url,
+            content=content,
+            embeds=embeds if embeds else None
+        )
+        
+        if success:
+            print(f"✅ SUCCESS - Forwarded to Discord")
+        else:
+            print(f"❌ FAILED - Could not forward to Discord")
+        
+        print(f"{'='*70}\n")
+        
+    except Exception as e:
+        print(f"❌ Error handling message: {e}")
+        if self.debug:
+            import traceback
+            traceback.print_exc()
             
     # get_sender_name
     def get_sender_name(self, sender):
