@@ -15,7 +15,7 @@ class TelegramBot:
             config.TELEGRAM_API_HASH
         )
         self.db = Database()
-        self.base_url = f"http://{config.HOST}:{config.PORT}"  # Changed to HTTP
+        self.base_url = f"http://{config.HOST}:{config.PORT}"
         self.debug = debug
         
     async def start(self):
@@ -33,14 +33,6 @@ class TelegramBot:
         # Get groups to monitor
         groups = self.db.get_all_groups()
         print(f"📊 Monitoring {len(groups)} groups from database")
-        
-        # Print group list
-        for group_id in groups:
-            try:
-                entity = await self.client.get_entity(group_id)
-                print(f"   📢 {entity.title} ({group_id})")
-            except:
-                print(f"   📢 Group ID: {group_id}")
         
         print("\n" + "="*60)
         print("🚀 Bot is running... Waiting for messages...")
@@ -60,40 +52,30 @@ class TelegramBot:
             # Get chat and message info
             chat = await event.get_chat()
             chat_id = event.chat_id
-        
+            
             # Convert to proper group ID format
             if not str(chat_id).startswith('-100'):
                 chat_id = int(f"-100{chat_id}")
-        
-            # ============= IMPROVED TOPIC DETECTION =============
+            
+            # ============= FIXED TOPIC DETECTION =============
             topic_id = 0  # Default untuk group biasa
-        
-            # Method 1: Check reply_to_top_id (most reliable for topics)
+            
             if hasattr(event.message, 'reply_to') and event.message.reply_to:
-                if hasattr(event.message.reply_to, 'reply_to_top_id'):
-                    if event.message.reply_to.reply_to_top_id:
-                        topic_id = event.message.reply_to.reply_to_top_id
-        
-            # Method 2: Check if message itself is a topic message
-            if topic_id == 0 and hasattr(event.message, 'id'):
-                # Untuk pesan pertama di topic, topic_id sama dengan message_id
-                if hasattr(chat, 'forum') and chat.forum:
-                    # Coba dapatkan dari action
-                    if hasattr(event.message, 'action'):
-                        topic_id = event.message.id
-        
-            # Method 3: Get from message metadata
-            if topic_id == 0:
-                if hasattr(event.message, 'reply_to_msg_id'):
-                    msg_id = event.message.reply_to_msg_id
-                    if msg_id and hasattr(chat, 'forum') and chat.forum:
-                        # Di forum, biasanya message di-reply ke topic header
-                        topic_id = msg_id
-        
+                reply = event.message.reply_to
+                
+                # Priority 1: reply_to_top_id (most reliable untuk topic)
+                if hasattr(reply, 'reply_to_top_id') and reply.reply_to_top_id:
+                    topic_id = reply.reply_to_top_id
+                
+                # Priority 2: Jika forum_topic=True, gunakan reply_to_msg_id
+                elif hasattr(reply, 'forum_topic') and reply.forum_topic:
+                    if hasattr(reply, 'reply_to_msg_id') and reply.reply_to_msg_id:
+                        topic_id = reply.reply_to_msg_id
+            
             # Detect if group has forum feature
             is_forum = hasattr(chat, 'forum') and chat.forum
-        
-            # ============= ALWAYS LOG ALL MESSAGES =============
+            
+            # ============= LOGGING =============
             print(f"\n{'='*70}")
             print(f"📨 NEW MESSAGE")
             print(f"{'='*70}")
@@ -101,7 +83,7 @@ class TelegramBot:
             print(f"Group ID: {chat_id}")
             print(f"Is Forum: {'YES ✅' if is_forum else 'NO ❌'}")
             print(f"Detected Topic ID: {topic_id}")
-        
+            
             # Debug message details
             if self.debug:
                 print(f"\n🔍 DEBUG INFO:")
@@ -114,16 +96,16 @@ class TelegramBot:
                 else:
                     print(f"   reply_to: NO")
                 print(f"   message_id: {event.message.id}")
-        
+            
             # ============= CHECK DATABASE =============
             webhook_url = self.db.get_webhook(chat_id, topic_id)
-        
+            
             print(f"\n🔍 Database Lookup:")
             print(f"   Looking for: group_id={chat_id}, topic_id={topic_id}")
-        
+            
             if not webhook_url:
                 print(f"   Result: ❌ NOT FOUND")
-            
+                
                 # Try to find ANY webhook for this group
                 all_webhooks = self.db.get_all_webhooks_for_group(chat_id)
                 if all_webhooks:
@@ -133,28 +115,28 @@ class TelegramBot:
                     print(f"\n   💡 Topic ID mismatch! Message has topic_id={topic_id}")
                 else:
                     print(f"   💡 No webhooks configured for group {chat_id}")
-            
+                
                 print(f"{'='*70}\n")
                 return
-        
+            
             print(f"   Result: ✅ FOUND")
             print(f"   Webhook: {webhook_url[:50]}...")
-        
+            
             # Get sender info
             sender = await event.get_sender()
             sender_name = self.get_sender_name(sender)
             print(f"\n👤 Sender: {sender_name}")
-        
+            
             # Get and save avatar
             avatar_url = await self.get_avatar_url(sender, sender_name)
-        
+            
             # Prepare message content
             content = event.message.message or ""
-        
+            
             if content:
                 preview = content[:100] + "..." if len(content) > 100 else content
                 print(f"💬 Content: {preview}")
-        
+            
             # Handle media
             embeds = []
             if event.message.media:
@@ -168,7 +150,7 @@ class TelegramBot:
                         embed["description"] = content
                         content = ""
                     embeds.append(embed)
-        
+            
             # Send to Discord
             print(f"\n📤 Sending to Discord...")
             success = await self.send_to_discord(
@@ -178,14 +160,14 @@ class TelegramBot:
                 content=content,
                 embeds=embeds if embeds else None
             )
-        
+            
             if success:
                 print(f"✅ SUCCESS - Forwarded to Discord")
             else:
                 print(f"❌ FAILED - Could not forward to Discord")
-        
+            
             print(f"{'='*70}\n")
-        
+            
         except Exception as e:
             print(f"❌ Error handling message: {e}")
             if self.debug:
