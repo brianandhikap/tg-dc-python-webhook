@@ -55,7 +55,6 @@ class TelegramBot:
             await self.handle_message(event)
     
     async def handle_message(self, event):
-async def handle_message(self, event):
         """Handle incoming messages"""
         try:
             # Get chat and message info
