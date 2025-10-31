@@ -14,7 +14,7 @@ async def check_groups():
     
     # List group IDs yang mau dicek
     group_ids = [
-        -1001921159003,
+        -xxxx,
         # tambahkan group ID lainnya
     ]
     
