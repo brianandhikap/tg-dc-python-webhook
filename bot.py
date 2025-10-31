@@ -15,7 +15,7 @@ class TelegramBot:
             config.TELEGRAM_API_HASH
         )
         self.db = Database()
-        self.base_url = f"https://{config.HOST}:{config.PORT}"
+        self.base_url = f"http://{config.HOST}:{config.PORT}"
         
     async def start(self):
         """Start the Telegram client"""
