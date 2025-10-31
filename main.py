@@ -17,8 +17,8 @@ async def main():
     # Wait a bit for web server to start
     await asyncio.sleep(2)
     
-    # Start Telegram bot
-    bot = TelegramBot()
+    # Start Telegram bot with debug mode
+    bot = TelegramBot(debug=True)  # Set False to disable debug logs
     try:
         await bot.start()
     except KeyboardInterrupt:
