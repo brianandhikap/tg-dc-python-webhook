@@ -19,12 +19,19 @@ MYSQL_DATABASE = os.getenv('MYSQL_DATABASE')
 HOST = os.getenv('HOST', '103.103.20.15')
 PORT = int(os.getenv('PORT', 1212))
 
+# Performance Config
+MAX_WORKERS = int(os.getenv('MAX_WORKERS', 10))  # Parallel message processors
+DISCORD_RATE_LIMIT = int(os.getenv('DISCORD_RATE_LIMIT', 5))  # Max concurrent Discord requests
+QUEUE_MAX_SIZE = int(os.getenv('QUEUE_MAX_SIZE', 1000))
+ENABLE_CACHE = os.getenv('ENABLE_CACHE', 'true').lower() == 'true'
+CACHE_TTL = int(os.getenv('CACHE_TTL', 300))  # 5 minutes
+
 # Media Paths
 MEDIA_AVA_PATH = 'media/ava'
 MEDIA_FILES_PATH = 'media/media'
 SESSION_PATH = 'session'
 
-# Create directories if not exist
+# Create directories
 os.makedirs(MEDIA_AVA_PATH, exist_ok=True)
 os.makedirs(MEDIA_FILES_PATH, exist_ok=True)
 os.makedirs(SESSION_PATH, exist_ok=True)
