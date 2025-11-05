@@ -3,6 +3,14 @@ import threading
 from bot import TelegramBot
 from web import run_web_server
 
+# Use uvloop for better async performance (Linux only)
+try:
+    import uvloop
+    asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+    print("✅ Using uvloop for better performance")
+except ImportError:
+    print("⚠️ uvloop not available, using default event loop")
+
 def start_web_server():
     """Start Flask web server in separate thread"""
     print("🌐 Starting web server...")
@@ -10,15 +18,14 @@ def start_web_server():
 
 async def main():
     """Main function"""
-    # Start web server in background thread
+    # Start web server in background
     web_thread = threading.Thread(target=start_web_server, daemon=True)
     web_thread.start()
     
-    # Wait a bit for web server to start
     await asyncio.sleep(2)
     
-    # Start Telegram bot with debug mode
-    bot = TelegramBot(debug=True)  # Set False to disable debug logs
+    # Start bot
+    bot = TelegramBot(debug=False)  # Set True for verbose logging
     try:
         await bot.start()
     except KeyboardInterrupt:
