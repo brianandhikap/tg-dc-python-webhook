@@ -3,12 +3,14 @@ from mysql.connector import Error, pooling
 import config
 import logging
 import time
+from cache import SimpleCache
 
 logger = logging.getLogger(__name__)
 
 class Database:
     def __init__(self):
         self.connection_pool = None
+        self.cache = SimpleCache(ttl=config.CACHE_TTL) if config.ENABLE_CACHE else None
         self.init_pool()
     
     def init_pool(self):
@@ -16,13 +18,14 @@ class Database:
         try:
             self.connection_pool = pooling.MySQLConnectionPool(
                 pool_name="tgdc_pool",
-                pool_size=5,
+                pool_size=10,  # Increased pool size
                 pool_reset_session=True,
                 host=config.MYSQL_HOST,
                 user=config.MYSQL_USER,
                 password=config.MYSQL_PASSWORD,
                 database=config.MYSQL_DATABASE,
-                autocommit=True
+                autocommit=True,
+                connection_timeout=10
             )
             logger.info("✅ MySQL connection pool created")
         except Error as e:
@@ -38,12 +41,20 @@ class Database:
             except Error as e:
                 logger.warning(f"Connection attempt {attempt + 1} failed: {e}")
                 if attempt < max_retries - 1:
-                    time.sleep(1)
+                    time.sleep(0.5)
                 else:
                     raise
     
     def get_webhook(self, group_id, topic_id=0):
-        """Get webhook URL for specific group and topic"""
+        """Get webhook URL for specific group and topic (with cache)"""
+        cache_key = f"webhook_{group_id}_{topic_id}"
+        
+        # Try cache first
+        if self.cache:
+            cached = self.cache.get(cache_key)
+            if cached is not None:
+                return cached
+        
         connection = None
         try:
             connection = self.get_connection()
@@ -54,14 +65,21 @@ class Database:
             cursor.execute(query, (group_id, topic_id))
             result = cursor.fetchone()
             
-            # If not found and topic_id is not 0, try wildcard (-1 = all topics)
+            # If not found and topic_id is not 0, try wildcard
             if not result and topic_id != 0:
                 query = "SELECT webhook_url FROM tg_dc_webhook WHERE group_id = %s AND topic_id = -1"
                 cursor.execute(query, (group_id,))
                 result = cursor.fetchone()
             
             cursor.close()
-            return result['webhook_url'] if result else None
+            
+            webhook_url = result['webhook_url'] if result else None
+            
+            # Cache the result (even if None)
+            if self.cache:
+                self.cache.set(cache_key, webhook_url)
+            
+            return webhook_url
             
         except Error as e:
             logger.error(f"❌ Error fetching webhook: {e}")
@@ -71,7 +89,14 @@ class Database:
                 connection.close()
     
     def get_all_groups(self):
-        """Get all unique group IDs from database"""
+        """Get all unique group IDs from database (with cache)"""
+        cache_key = "all_groups"
+        
+        if self.cache:
+            cached = self.cache.get(cache_key)
+            if cached is not None:
+                return cached
+        
         connection = None
         try:
             connection = self.get_connection()
@@ -80,7 +105,13 @@ class Database:
             cursor.execute(query)
             results = cursor.fetchall()
             cursor.close()
-            return [row[0] for row in results]
+            
+            groups = [row[0] for row in results]
+            
+            if self.cache:
+                self.cache.set(cache_key, groups)
+            
+            return groups
         except Error as e:
             logger.error(f"❌ Error fetching groups: {e}")
             return []
@@ -111,5 +142,7 @@ class Database:
         try:
             if self.connection_pool:
                 logger.info("❌ Closing MySQL connection pool")
+            if self.cache:
+                self.cache.clear()
         except Exception as e:
             logger.error(f"Error closing pool: {e}")
